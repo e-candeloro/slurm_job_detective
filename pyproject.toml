@@ -1,7 +1,17 @@
 [project]
 name = "slurm-job-detective"
 version = "0.1.0"
-description = "A simple CLI tool to see if your SLURM Jobs state and resource usage."
+description = "Live SLURM job stats: CPU efficiency, memory usage, and resource suggestions."
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.10"
+dependencies = ["rich>=13.0"]
+
+[project.scripts]
+sjdet = "sjdet:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sjdet"]
