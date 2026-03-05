@@ -13,18 +13,22 @@ Live CPU and memory stats for your running and pending SLURM jobs — in your te
 
 ## Install
 
-No root needed. Requires [`pipx`](https://pipx.pypa.io) or [`uv`](https://docs.astral.sh/uv/).
+No root needed. Requires [`uv`](https://docs.astral.sh/uv/) (recommended) or [`pipx`](https://pipx.pypa.io).
 
+Both methods install `sjdet` to `~/.local/bin` — just type `sjdet` from anywhere, no virtual environment activation needed.
+
+### uv (recommended)
+```bash
+# install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# install the tool
+uv tool install git+https://github.com/e-candeloro/slurm_job_detective
+```
 ### pipx
 ```bash
+# install pipx
+python3 -m pip install --user pipx
 pipx install git+https://github.com/e-candeloro/slurm_job_detective
-```
-### uv
-```bash
-#install uv (if not installed already)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-#install the tool
-uv tool install git+https://github.com/e-candeloro/slurm_job_detective
 ```
 
 ## Usage
