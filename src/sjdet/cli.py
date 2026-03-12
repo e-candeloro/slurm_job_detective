@@ -62,20 +62,25 @@ def main() -> None:
         key=lambda j: -to_seconds([r.elapsed for r in rows if r.jobid == j][0]),
     )[: args.max_jobs]
 
-    # One batched scontrol call for all nodes that have GPUs
-    gpu_nodes = list({r.node for r in rows if r.gpu_count > 0 and r.node})
-    node_gpu_info = scontrol_node_gpu_info(gpu_nodes)
-    for r in rows:
-        if r.node in node_gpu_info:
-            model, vram_gb = node_gpu_info[r.node]
-            r.gpu_total_gb = vram_gb
-            if not r.gpu_type:
-                r.gpu_type = model
-
     cache = read_cache()
     now = time.time()
     joblist_key = ",".join(sorted(running_ids))
     old_data = cache.get("data", {})
+
+    # GPU node info (model + total VRAM) is static hardware — cache forever,
+    # only call scontrol for nodes we haven't seen yet.
+    cached_node_info = cache.get("node_info", {})
+    gpu_nodes = [n for r in rows if r.gpu_count > 0 and r.node for n in [r.node]]
+    missing_nodes = list({n for n in gpu_nodes if n not in cached_node_info})
+    if missing_nodes:
+        cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
+
+    for r in rows:
+        if r.node in cached_node_info:
+            model, vram_gb = cached_node_info[r.node]
+            r.gpu_total_gb = vram_gb
+            if not r.gpu_type:
+                r.gpu_type = model
 
     use_cache = (
         running_ids
@@ -86,7 +91,10 @@ def main() -> None:
 
     if running_ids and not use_cache:
         sstat_data = sstat_batch(running_ids)
-        write_cache({"ts": now, "joblist": joblist_key, "data": sstat_data})
+        write_cache({"ts": now, "joblist": joblist_key, "data": sstat_data, "node_info": cached_node_info})
+    elif missing_nodes:
+        # sstat still cached but we learned about new nodes — persist node info
+        write_cache({"ts": cache.get("ts", 0), "joblist": cache.get("joblist", ""), "data": old_data, "node_info": cached_node_info})
 
     for r in rows:
         if r.state != "RUNNING" or not (d := sstat_data.get(r.jobid)):
