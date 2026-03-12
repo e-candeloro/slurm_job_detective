@@ -12,8 +12,12 @@ from sjdet.slurm import (
     LiveRow,
     list_live_squeue,
     metric_to_gb,
+    parse_gres_gpu_count,
+    parse_gres_gpu_type,
     parse_pages,
+    parse_tres_value,
     run,
+    scontrol_node_gpu_info,
     sstat_batch,
     to_seconds,
 )
@@ -39,13 +43,34 @@ def main() -> None:
         return
 
     rows = [
-        LiveRow(jid, name, state, el, cp, req) for jid, state, el, cp, req, name in live
+        LiveRow(
+            jobid=jid,
+            name=name,
+            state=state,
+            elapsed=el,
+            cpus=cp,
+            req_mem_gb=req,
+            node=node,
+            gpu_count=parse_gres_gpu_count(gres),
+            gpu_type=parse_gres_gpu_type(gres),
+        )
+        for jid, state, el, cp, req, name, node, gres in live
     ]
     running_ids = [r.jobid for r in rows if r.state == "RUNNING"]
     running_ids = sorted(
         running_ids,
         key=lambda j: -to_seconds([r.elapsed for r in rows if r.jobid == j][0]),
     )[: args.max_jobs]
+
+    # One batched scontrol call for all nodes that have GPUs
+    gpu_nodes = list({r.node for r in rows if r.gpu_count > 0 and r.node})
+    node_gpu_info = scontrol_node_gpu_info(gpu_nodes)
+    for r in rows:
+        if r.node in node_gpu_info:
+            model, vram_gb = node_gpu_info[r.node]
+            r.gpu_total_gb = vram_gb
+            if not r.gpu_type:
+                r.gpu_type = model
 
     cache = read_cache()
     now = time.time()
@@ -71,6 +96,13 @@ def main() -> None:
         r.maxdisk_gb = metric_to_gb(d.get("maxdisk"), "B")
         r.maxpages = parse_pages(d.get("maxpages"))
 
+        tres = d.get("tres_in_max", "")
+        r.gpu_mem_gb = metric_to_gb(parse_tres_value(tres, "gres/gpumem"), "B")
+        try:
+            r.gpu_util_pct = float(parse_tres_value(tres, "gres/gpuutil") or 0)
+        except ValueError:
+            pass
+
         try:
             avecpu_s = to_seconds(d.get("avecpu", "0"))
             ntasks = int(d.get("ntasks", "0"))
@@ -84,11 +116,17 @@ def main() -> None:
         if not use_cache and r.jobid in old_data:
             old_p = parse_pages(old_data[r.jobid].get("maxpages"))
             old_d = metric_to_gb(old_data[r.jobid].get("maxdisk"), "B")
+            old_g = metric_to_gb(
+                parse_tres_value(old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"), "B"
+            )
             r.maxpages_trend = (
                 1 if r.maxpages > old_p else (-1 if r.maxpages < old_p else 0)
             )
             r.maxdisk_trend = (
                 1 if r.maxdisk_gb > old_d else (-1 if r.maxdisk_gb < old_d else 0)
+            )
+            r.gpu_mem_trend = (
+                1 if r.gpu_mem_gb > old_g else (-1 if r.gpu_mem_gb < old_g else 0)
             )
 
     console.print(build_table(rows, args.headroom))
