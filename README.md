@@ -8,8 +8,7 @@
 > **Are you wasting GPU memory? Underusing CPUs? Thrashing disk?**  
 > `sjdet` shows you instantly — one command, no environment to activate.
 
-<!-- Add a screenshot or GIF here -->
-<!-- ![sjdet demo](assets/demo.gif) -->
+![sjdet demo](media/demo/sjdet_demo.png)
 
 ---
 
