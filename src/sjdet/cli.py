@@ -12,8 +12,12 @@ from sjdet.slurm import (
     LiveRow,
     list_live_squeue,
     metric_to_gb,
+    parse_gres_gpu_count,
+    parse_gres_gpu_type,
     parse_pages,
+    parse_tres_value,
     run,
+    scontrol_node_gpu_info,
     sstat_batch,
     to_seconds,
 )
@@ -39,7 +43,18 @@ def main() -> None:
         return
 
     rows = [
-        LiveRow(jid, name, state, el, cp, req) for jid, state, el, cp, req, name in live
+        LiveRow(
+            jobid=jid,
+            name=name,
+            state=state,
+            elapsed=el,
+            cpus=cp,
+            req_mem_gb=req,
+            node=node,
+            gpu_count=parse_gres_gpu_count(gres),
+            gpu_type=parse_gres_gpu_type(gres),
+        )
+        for jid, state, el, cp, req, name, node, gres in live
     ]
     running_ids = [r.jobid for r in rows if r.state == "RUNNING"]
     running_ids = sorted(
@@ -52,6 +67,21 @@ def main() -> None:
     joblist_key = ",".join(sorted(running_ids))
     old_data = cache.get("data", {})
 
+    # GPU node info (model + total VRAM) is static hardware — cache forever,
+    # only call scontrol for nodes we haven't seen yet.
+    cached_node_info = cache.get("node_info", {})
+    gpu_nodes = [n for r in rows if r.gpu_count > 0 and r.node for n in [r.node]]
+    missing_nodes = list({n for n in gpu_nodes if n not in cached_node_info})
+    if missing_nodes:
+        cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
+
+    for r in rows:
+        if r.node in cached_node_info:
+            model, vram_gb = cached_node_info[r.node]
+            r.gpu_total_gb = vram_gb
+            if not r.gpu_type:
+                r.gpu_type = model
+
     use_cache = (
         running_ids
         and cache.get("joblist") == joblist_key
@@ -61,7 +91,10 @@ def main() -> None:
 
     if running_ids and not use_cache:
         sstat_data = sstat_batch(running_ids)
-        write_cache({"ts": now, "joblist": joblist_key, "data": sstat_data})
+        write_cache({"ts": now, "joblist": joblist_key, "data": sstat_data, "node_info": cached_node_info})
+    elif missing_nodes:
+        # sstat still cached but we learned about new nodes — persist node info
+        write_cache({"ts": cache.get("ts", 0), "joblist": cache.get("joblist", ""), "data": old_data, "node_info": cached_node_info})
 
     for r in rows:
         if r.state != "RUNNING" or not (d := sstat_data.get(r.jobid)):
@@ -70,6 +103,13 @@ def main() -> None:
         r.maxrss_gb = metric_to_gb(d.get("maxrss"), "K")
         r.maxdisk_gb = metric_to_gb(d.get("maxdisk"), "B")
         r.maxpages = parse_pages(d.get("maxpages"))
+
+        tres = d.get("tres_in_max", "")
+        r.gpu_mem_gb = metric_to_gb(parse_tres_value(tres, "gres/gpumem"), "B")
+        try:
+            r.gpu_util_pct = float(parse_tres_value(tres, "gres/gpuutil") or 0)
+        except ValueError:
+            pass
 
         try:
             avecpu_s = to_seconds(d.get("avecpu", "0"))
@@ -84,11 +124,17 @@ def main() -> None:
         if not use_cache and r.jobid in old_data:
             old_p = parse_pages(old_data[r.jobid].get("maxpages"))
             old_d = metric_to_gb(old_data[r.jobid].get("maxdisk"), "B")
+            old_g = metric_to_gb(
+                parse_tres_value(old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"), "B"
+            )
             r.maxpages_trend = (
                 1 if r.maxpages > old_p else (-1 if r.maxpages < old_p else 0)
             )
             r.maxdisk_trend = (
                 1 if r.maxdisk_gb > old_d else (-1 if r.maxdisk_gb < old_d else 0)
+            )
+            r.gpu_mem_trend = (
+                1 if r.gpu_mem_gb > old_g else (-1 if r.gpu_mem_gb < old_g else 0)
             )
 
     console.print(build_table(rows, args.headroom))

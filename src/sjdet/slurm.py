@@ -92,6 +92,30 @@ def parse_pages(s: str) -> int:
     return int(val * mults.get(unit, 1.0))
 
 
+def parse_tres_value(tres: str, key: str) -> str:
+    """Extract the raw value string for a key from a TRES string.
+
+    e.g. parse_tres_value('gres/gpumem=4096,gres/gpuutil=72', 'gres/gpumem') -> '4096'
+    """
+    m = re.search(rf'(?:^|,){re.escape(key)}=([^,\s]+)', tres or "")
+    return m.group(1) if m else ""
+
+
+def parse_gres_gpu_count(gres: str) -> int:
+    """Extract GPU count from squeue %b GRES string.
+
+    Handles 'gres/gpu:1' and 'gres/gpu:a100:2' formats.
+    """
+    m = re.search(r'gres/gpu(?::[a-zA-Z0-9_]+)?:(\d+)', gres or "")
+    return int(m.group(1)) if m else 0
+
+
+def parse_gres_gpu_type(gres: str) -> str:
+    """Extract GPU type from GRES string, e.g. 'a100' from 'gres/gpu:a100:2'."""
+    m = re.search(r'gres/gpu:([a-zA-Z][a-zA-Z0-9_]*)?:(\d+)', gres or "")
+    return m.group(1) if m else ""
+
+
 # ----------------------------- data model ----------------------------- #
 
 
@@ -109,18 +133,28 @@ class LiveRow:
     maxpages_trend: int = 0
     maxdisk_gb: float = 0.0
     maxdisk_trend: int = 0
+    node: str = ""
+    gpu_count: int = 0       # GPUs allocated (from squeue %b)
+    gpu_type: str = ""       # GPU model if available (e.g. 'a100')
+    gpu_mem_gb: float = 0.0  # VRAM used in GB (from sstat TRESUsageInMax gres/gpumem)
+    gpu_util_pct: float = 0.0  # GPU utilization % (from sstat TRESUsageInMax gres/gpuutil)
+    gpu_total_gb: float = 0.0  # total VRAM per GPU from node features (e.g. gpu_A40_45G → 45)
+    gpu_mem_trend: int = 0   # +1 ↑, -1 ↓, 0 — compared to previous poll
 
 
 # ----------------------------- SLURM helpers ----------------------------- #
 
 
-def list_live_squeue(user: str) -> List[Tuple[str, str, str, int, float, str]]:
-    out = run(f'squeue -u {shlex.quote(user)} -h -o "%i|%T|%M|%C|%m|%j"')
+def list_live_squeue(user: str) -> List[Tuple[str, str, str, int, float, str, str, str]]:
+    out = run(f'squeue -u {shlex.quote(user)} -h -o "%i|%T|%M|%C|%m|%j|%N|%b"')
     rows = []
     for line in out.splitlines():
         if not line.strip():
             continue
-        jid, state, elapsed, cpus, reqm, name = line.split("|", 5)
+        parts = line.split("|", 7)
+        if len(parts) < 8:
+            continue
+        jid, state, elapsed, cpus, reqm, name, node, gres = parts
         rows.append(
             (
                 jid.strip(),
@@ -129,9 +163,37 @@ def list_live_squeue(user: str) -> List[Tuple[str, str, str, int, float, str]]:
                 int(cpus),
                 metric_to_gb(reqm, "M"),
                 name.strip(),
+                node.strip(),
+                gres.strip(),
             )
         )
     return rows
+
+
+def scontrol_node_gpu_info(nodes: List[str]) -> Dict[str, Tuple[str, float]]:
+    """Return {node: (gpu_model, vram_gb_per_gpu)} for each node.
+
+    Reads AvailableFeatures=gpu_<MODEL>_<VRAM>G from a single batched
+    `scontrol show node` call — no per-node loops.
+    """
+    if not nodes:
+        return {}
+    nodelist = ",".join(sorted(set(nodes)))
+    out = run(f"scontrol show node {shlex.quote(nodelist)}")
+
+    result: Dict[str, Tuple[str, float]] = {}
+    current_node = ""
+    for line in out.splitlines():
+        nm = re.search(r'NodeName=(\S+)', line)
+        if nm:
+            current_node = nm.group(1)
+            continue
+        fm = re.search(r'AvailableFeatures=gpu_([A-Za-z0-9_]+)_(\d+)G', line)
+        if fm and current_node:
+            model = fm.group(1).replace("_", " ")
+            vram_gb = float(fm.group(2))
+            result[current_node] = (model, vram_gb)
+    return result
 
 
 def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
@@ -140,7 +202,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
     jlist = ",".join(jobids)
     rows = run(
         f"sstat -j {shlex.quote(jlist)} --noheader --parsable2 "
-        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite"
+        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,TRESUsageInMax"
     )
     result = {}
     for ln in rows.splitlines():
@@ -148,6 +210,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
         if len(parts) < 6:
             continue
         jobstep, avecpu, ntasks, mrss, mpages, mdisk = parts[:6]
+        tres = parts[6].strip() if len(parts) > 6 else ""
         jid = jobstep.split(".")[0]
         result[jid] = {
             "avecpu": avecpu.strip(),
@@ -155,5 +218,6 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
             "maxrss": mrss.strip(),
             "maxpages": mpages.strip(),
             "maxdisk": mdisk.strip(),
+            "tres_in_max": tres,
         }
     return result
