@@ -115,8 +115,7 @@ def gpu_group(gpu_count: int, gpu_type: str, gpu_mem_gb: float, gpu_util_pct: fl
         # total VRAM unknown — fall back to util% bar with same inverted scale
         util = max(0.0, min(100.0, gpu_util_pct))
         util_style = "green" if util >= 80 else ("yellow3" if util >= 40 else "red3")
-        vram_str = f"{gpu_mem_gb*1024:.0f} MiB" if gpu_mem_gb < 1 else f"{gpu_mem_gb:.2f} GB"
-        vram_txt = Text(f"VRAM {vram_str}  util {util:.0f}%")
+        vram_txt = Text(f"util {util:.0f}%")
         vram_txt.stylize(util_style)
         bar = ProgressBar(total=100.0, completed=util, width=18, style=util_style)
 

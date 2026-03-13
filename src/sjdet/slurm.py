@@ -182,17 +182,46 @@ def scontrol_node_gpu_info(nodes: List[str]) -> Dict[str, Tuple[str, float]]:
     out = run(f"scontrol show node {shlex.quote(nodelist)}")
 
     result: Dict[str, Tuple[str, float]] = {}
-    current_node = ""
-    for line in out.splitlines():
-        nm = re.search(r'NodeName=(\S+)', line)
-        if nm:
-            current_node = nm.group(1)
+    node_blocks = re.split(r'(?=NodeName=)', out)
+    
+    for block in node_blocks:
+        nm = re.search(r'NodeName=(\S+)', block)
+        if not nm:
             continue
-        fm = re.search(r'AvailableFeatures=gpu_([A-Za-z0-9_]+)_(\d+)G', line)
-        if fm and current_node:
+        current_node = nm.group(1)
+        
+        # Try standard format like AvailableFeatures=gpu_A40_45G
+        fm = re.search(r'AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)_(\d+)G\b', block)
+        if fm:
             model = fm.group(1).replace("_", " ")
             vram_gb = float(fm.group(2))
             result[current_node] = (model, vram_gb)
+            continue
+            
+        # Try generic patterns in the block
+        vram = 0.0
+        # Search for sequences like 40GB, 80_GB, 45G, etc in AvailableFeatures or Gres
+        vm = re.search(r'\b(\d+)_?GB\b', block, re.IGNORECASE)
+        if vm:
+            vram = float(vm.group(1))
+        else:
+            vm = re.search(r'\b(?i:vram)_?(\d+)G\b', block, re.IGNORECASE)
+            if vm:
+                vram = float(vm.group(1))
+
+        # Try to guess model from Gres like gpu:a100:2
+        model = ""
+        gm = re.search(r'Gres=[^\s]*\bgpu:([A-Za-z0-9_]+):', block)
+        if gm:
+            model = gm.group(1).replace("_", " ")
+        else:
+            gm2 = re.search(r'AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)\b', block)
+            if gm2:
+                model = gm2.group(1).replace("_", " ")
+
+        if model or vram > 0:
+            result[current_node] = (model, vram)
+
     return result
 
 

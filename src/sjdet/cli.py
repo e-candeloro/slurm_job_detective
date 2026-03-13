@@ -6,7 +6,7 @@ import time
 
 from rich.console import Console
 
-from sjdet.cache import read_cache, write_cache
+from sjdet.cache import clear_cache, read_cache, write_cache
 from sjdet.display import build_table
 from sjdet.slurm import (
     LiveRow,
@@ -31,10 +31,18 @@ def main() -> None:
     parser.add_argument("--max-jobs", type=int, default=10)
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--headroom", type=float, default=0.20)
+    parser.add_argument("--force-update-nodes", action="store_true", help="Force update the node info cache")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear the local cache and exit")
     args = parser.parse_args()
 
     user = args.user or run("whoami")
     os.environ["SLURM_STATS_USER"] = user
+
+    if args.clear_cache:
+        clear_cache()
+        console.print("[green]Cache cleared successfully.[/green]")
+        return
+
     min_interval = max(60, args.interval)
 
     live = list_live_squeue(user)
@@ -71,7 +79,7 @@ def main() -> None:
     # only call scontrol for nodes we haven't seen yet.
     cached_node_info = cache.get("node_info", {})
     gpu_nodes = [n for r in rows if r.gpu_count > 0 and r.node for n in [r.node]]
-    missing_nodes = list({n for n in gpu_nodes if n not in cached_node_info})
+    missing_nodes = list({n for n in gpu_nodes if n not in cached_node_info or args.force_update_nodes})
     if missing_nodes:
         cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
 

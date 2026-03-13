@@ -35,3 +35,11 @@ def write_cache(d: dict) -> None:
         CACHE_FILE.write_text(json.dumps(d))
     except Exception:
         pass
+
+
+def clear_cache() -> None:
+    try:
+        if CACHE_FILE.exists():
+            CACHE_FILE.unlink()
+    except Exception:
+        pass
