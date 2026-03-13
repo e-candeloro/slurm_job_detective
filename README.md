@@ -56,11 +56,13 @@ pipx install git+https://github.com/e-candeloro/slurm_job_detective
 ## Usage
 
 ```bash
-sjdet                    # auto-detects $USER, shows all your jobs
-sjdet --user alice       # inspect another user's jobs
-sjdet --max-jobs 20      # show up to 20 jobs (default: 10)
-sjdet --interval 120     # minimum seconds between sstat polls (default: 60)
-sjdet --headroom 0.30    # memory suggestion headroom: ceil(MaxRSS × 1.30) (default: 20%)
+sjdet                             # auto-detects $USER, shows all your jobs
+sjdet --user alice                # inspect another user's jobs
+sjdet --max-jobs 20               # show up to 20 jobs (default: 10)
+sjdet --interval 120              # minimum seconds between sstat polls (default: 60)
+sjdet --headroom 0.30             # memory suggestion headroom: ceil(MaxRSS × 1.30) (default: 20%)
+sjdet --force-update-nodes        # forces an update to the node info cache
+sjdet --clear-cache               # clears the local user cache completely and exits
 ```
 
 **Reading the GPU column:**
@@ -118,6 +120,7 @@ src/sjdet/
 ├── display.py  ← rich table, progress bars, color logic
 └── cache.py    ← local JSON cache (throttles sstat + persists node info)
 scripts/
-└── gpu_load_test.py  ← dev tool to burn VRAM and verify GPU column
+├── gpu_load_test.py  ← dev tool to burn VRAM and verify GPU column
+└── mock_cli.py ← dev tool to test the CLI without the access of a SLURM scheduler
 ```
 
