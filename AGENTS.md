@@ -14,11 +14,14 @@ This file gives coding agents the minimum repository-specific context needed to 
 
 ## Important Rule Files
 
-- No `AGENTS.md` existed before this file.
-- No Cursor rules were found in `.cursor/rules/`.
-- No `.cursorrules` file was found.
-- No Copilot instructions were found in `.github/copilot-instructions.md`.
-- If any of those files are added later, treat them as higher-priority repo guidance and update this file accordingly.
+- `AGENTS.md` is the active workspace instruction file for this repository.
+- Keep using only one workspace instruction type (`AGENTS.md` or `.github/copilot-instructions.md`), not both.
+- No Cursor/Windsurf/Cliner rules are currently present in this repository.
+
+## Documentation Links
+
+- For user-facing usage and installation details, prefer linking to `README.md` instead of repeating large sections.
+- Keep this file focused on agent-critical development behavior and repository conventions.
 
 ## Project Layout
 
@@ -73,7 +76,7 @@ uv run python scripts/mock_cli.py
 GPU manual verification helper:
 
 ```bash
-uv run python scripts/gpu_load_test.py --gb 8 --seconds 300
+uv run scripts/gpu_load_test.py --gb 8 --seconds 300
 ```
 
 ## Build Commands
@@ -113,7 +116,7 @@ There is currently no dedicated `tests/` directory and no configured automated t
 What exists today:
 
 - `uv run python scripts/mock_cli.py` for a mocked end-to-end sanity check.
-- `uv run python scripts/gpu_load_test.py ...` for manual GPU verification on a real SLURM job.
+- `uv run scripts/gpu_load_test.py ...` for manual GPU verification on a real SLURM job.
 
 Recommended verification flow after code changes:
 
@@ -252,6 +255,6 @@ uv sync --dev
 uv run sjdet
 uv run python -m sjdet
 uv run python scripts/mock_cli.py
-uv run python scripts/gpu_load_test.py --gb 8 --seconds 300
+uv run scripts/gpu_load_test.py --gb 8 --seconds 300
 uv build
 ```
