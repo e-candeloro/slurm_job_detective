@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -38,25 +39,26 @@ def _http_get_json(url: str, timeout: float = 4.0) -> Optional[object]:
         return None
 
 
-def _parse_semver_like(v: str) -> Optional[Tuple[int, int, int]]:
+def _parse_semver_like(v: str) -> Optional[Tuple[int, int, int, int, int]]:
+    """Parse x.y.z and x.y.z(a|b|rc)N (with optional leading v)."""
     s = (v or "").strip()
-    if s.startswith("v"):
-        s = s[1:]
-    parts = s.split(".")
-    if len(parts) < 3:
+    match = re.match(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?$", s)
+    if not match:
         return None
-    nums: List[int] = []
-    for p in parts[:3]:
-        n = ""
-        for ch in p:
-            if ch.isdigit():
-                n += ch
-            else:
-                break
-        if not n:
-            return None
-        nums.append(int(n))
-    return nums[0], nums[1], nums[2]
+
+    major = int(match.group(1))
+    minor = int(match.group(2))
+    patch = int(match.group(3))
+    stage = match.group(4) or ""
+    stage_num = int(match.group(5) or 0)
+
+    stage_rank = {
+        "a": 0,
+        "b": 1,
+        "rc": 2,
+        "": 3,
+    }[stage]
+    return major, minor, patch, stage_rank, stage_num
 
 
 def _installed_commit() -> str:
