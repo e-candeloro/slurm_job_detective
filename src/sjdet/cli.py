@@ -21,6 +21,7 @@ from sjdet.slurm import (
     sstat_batch,
     to_seconds,
 )
+from sjdet.update import maybe_update_notice, run_update_chain
 
 console = Console()
 
@@ -31,8 +32,15 @@ def main() -> None:
     parser.add_argument("--max-jobs", type=int, default=10)
     parser.add_argument("--interval", type=int, default=60)
     parser.add_argument("--headroom", type=float, default=0.20)
-    parser.add_argument("--force-update-nodes", action="store_true", help="Force update the node info cache")
-    parser.add_argument("--clear-cache", action="store_true", help="Clear the local cache and exit")
+    parser.add_argument(
+        "--force-update-nodes",
+        action="store_true",
+        help="Force update the node info cache",
+    )
+    parser.add_argument(
+        "--clear-cache", action="store_true", help="Clear the local cache and exit"
+    )
+    parser.add_argument("--update", action="store_true", help="Update sjdet and exit")
     args = parser.parse_args()
 
     user = args.user or run("whoami")
@@ -42,6 +50,43 @@ def main() -> None:
         clear_cache()
         console.print("[green]Cache cleared successfully.[/green]")
         return
+
+    cache = read_cache()
+    if args.update:
+        result = run_update_chain()
+        update_meta = cache.get("update", {})
+        if not isinstance(update_meta, dict):
+            update_meta = {}
+        now_update = time.time()
+        update_meta.update(
+            {
+                "last_update_attempt_ts": now_update,
+                "last_update_success": bool(result.get("success")),
+                "last_update_command": str(result.get("command", "")),
+                "last_update_output": str(result.get("output", ""))[:3000],
+            }
+        )
+        cache["update"] = update_meta
+        write_cache(cache)
+
+        if result.get("success"):
+            console.print("[green]sjdet updated successfully.[/green]")
+        else:
+            console.print("[red]Failed to update sjdet automatically.[/red]")
+            attempts = result.get("attempts", [])
+            if isinstance(attempts, list):
+                for item in attempts:
+                    if isinstance(item, dict):
+                        cmd = str(item.get("command", ""))
+                        rc = item.get("returncode")
+                        console.print(f"[yellow]- {cmd} (rc={rc})[/yellow]")
+        return
+
+    notice, update_meta = maybe_update_notice(cache, time.time())
+    cache["update"] = update_meta
+    write_cache(cache)
+    if notice:
+        console.print(f"[yellow]{notice}[/yellow]")
 
     min_interval = max(60, args.interval)
 
@@ -70,7 +115,6 @@ def main() -> None:
         key=lambda j: -to_seconds([r.elapsed for r in rows if r.jobid == j][0]),
     )[: args.max_jobs]
 
-    cache = read_cache()
     now = time.time()
     joblist_key = ",".join(sorted(running_ids))
     old_data = cache.get("data", {})
@@ -79,7 +123,9 @@ def main() -> None:
     # only call scontrol for nodes we haven't seen yet.
     cached_node_info = cache.get("node_info", {})
     gpu_nodes = [n for r in rows if r.gpu_count > 0 and r.node for n in [r.node]]
-    missing_nodes = list({n for n in gpu_nodes if n not in cached_node_info or args.force_update_nodes})
+    missing_nodes = list(
+        {n for n in gpu_nodes if n not in cached_node_info or args.force_update_nodes}
+    )
     if missing_nodes:
         cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
 
@@ -99,10 +145,26 @@ def main() -> None:
 
     if running_ids and not use_cache:
         sstat_data = sstat_batch(running_ids)
-        write_cache({"ts": now, "joblist": joblist_key, "data": sstat_data, "node_info": cached_node_info})
+        cache.update(
+            {
+                "ts": now,
+                "joblist": joblist_key,
+                "data": sstat_data,
+                "node_info": cached_node_info,
+            }
+        )
+        write_cache(cache)
     elif missing_nodes:
         # sstat still cached but we learned about new nodes — persist node info
-        write_cache({"ts": cache.get("ts", 0), "joblist": cache.get("joblist", ""), "data": old_data, "node_info": cached_node_info})
+        cache.update(
+            {
+                "ts": cache.get("ts", 0),
+                "joblist": cache.get("joblist", ""),
+                "data": old_data,
+                "node_info": cached_node_info,
+            }
+        )
+        write_cache(cache)
 
     for r in rows:
         if r.state != "RUNNING" or not (d := sstat_data.get(r.jobid)):
@@ -133,7 +195,10 @@ def main() -> None:
             old_p = parse_pages(old_data[r.jobid].get("maxpages"))
             old_d = metric_to_gb(old_data[r.jobid].get("maxdisk"), "B")
             old_g = metric_to_gb(
-                parse_tres_value(old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"), "B"
+                parse_tres_value(
+                    old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"
+                ),
+                "B",
             )
             r.maxpages_trend = (
                 1 if r.maxpages > old_p else (-1 if r.maxpages < old_p else 0)
