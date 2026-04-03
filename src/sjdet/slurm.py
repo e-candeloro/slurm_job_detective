@@ -4,7 +4,7 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 SLURM_BINARIES = {
@@ -160,10 +160,25 @@ class LiveRow:
     cpu_eff_pct: float = 0.0
     maxpages: int = 0
     maxpages_trend: int = 0
+    maxpages_delta: float = 0.0
+    maxpages_rate_per_sec: float = 0.0
+    maxpages_rate_change_pct: Optional[float] = None
+    maxpages_reset: bool = False
     maxdisk_gb: float = 0.0
     maxdisk_trend: int = 0
+    maxdisk_delta_gb: float = 0.0
+    maxdisk_rate_gb_per_sec: float = 0.0
+    maxdisk_rate_change_pct: Optional[float] = None
+    maxdisk_reset: bool = False
     maxdiskread_gb: float = 0.0
     maxdiskread_trend: int = 0
+    maxdiskread_delta_gb: float = 0.0
+    maxdiskread_rate_gb_per_sec: float = 0.0
+    maxdiskread_rate_change_pct: Optional[float] = None
+    maxdiskread_reset: bool = False
+    cpu_eff_change_pct: Optional[float] = None
+    maxrss_change_pct: Optional[float] = None
+    gpu_vram_change_pct: Optional[float] = None
     node: str = ""
     gpu_count: int = 0  # GPUs allocated (from squeue %b)
     gpu_type: str = ""  # GPU model if available (e.g. 'a100')

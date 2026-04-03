@@ -13,11 +13,12 @@ Fields currently used by this repository:
 - `MaxRSS`
 - `MaxPages`
 - `MaxDiskWrite`
+- `MaxDiskRead`
 - `TRESUsageInMax`
 
 Project command shape:
 ```bash
-sstat -j <jobids> --noheader --parsable2 --format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,TRESUsageInMax
+sstat -j <jobids> --noheader --parsable2 --format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,MaxDiskRead,TRESUsageInMax
 ```
 
 Operational notes from official docs:

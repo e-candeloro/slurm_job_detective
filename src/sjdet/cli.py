@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from typing import Dict, Optional
 
 from rich.console import Console
 
@@ -25,6 +26,38 @@ from sjdet.slurm import (
 from sjdet.update import maybe_update_notice, run_update_chain
 
 console = Console()
+MAX_DELTA_WINDOW_SECONDS = 24 * 60 * 60
+EPSILON = 1e-9
+
+
+def _clamp_pct(pct: float) -> float:
+    return max(0.0, min(100.0, pct))
+
+
+def _safe_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _optional_float(value: object) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_change(current: float, previous: float) -> Optional[float]:
+    if previous <= EPSILON:
+        return 0.0 if current <= EPSILON else None
+    return ((current - previous) / abs(previous)) * 100.0
+
+
+def _gpu_vram_pct(row: LiveRow) -> float:
+    if row.gpu_total_gb > 0:
+        return _clamp_pct((100.0 * row.gpu_mem_gb) / row.gpu_total_gb)
+    return _clamp_pct(row.gpu_util_pct)
 
 
 def print_slurm_missing_warning(command: str) -> None:
@@ -131,6 +164,12 @@ def main() -> None:
     now = time.time()
     joblist_key = ",".join(sorted(running_ids))
     old_data = cache.get("data", {})
+    snapshot_section = cache.get("metric_snapshot", {})
+    if not isinstance(snapshot_section, dict):
+        snapshot_section = {}
+    old_snapshots = snapshot_section.get("jobs", {})
+    if not isinstance(old_snapshots, dict):
+        old_snapshots = {}
 
     # GPU node info (model + total VRAM) is static hardware — cache forever,
     # only call scontrol for nodes we haven't seen yet.
@@ -212,30 +251,92 @@ def main() -> None:
         except Exception:
             pass
 
-        # Trend calculation (only valid if we actively polled new data)
-        if not use_cache and r.jobid in old_data:
-            old_p = parse_pages(old_data[r.jobid].get("maxpages"))
-            old_d = metric_to_gb(old_data[r.jobid].get("maxdisk"), "B")
-            old_dr = metric_to_gb(old_data[r.jobid].get("maxdiskread"), "B")
-            old_g = metric_to_gb(
-                parse_tres_value(
-                    old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"
-                ),
-                "B",
-            )
-            r.maxpages_trend = (
-                1 if r.maxpages > old_p else (-1 if r.maxpages < old_p else 0)
-            )
-            r.maxdisk_trend = (
-                1 if r.maxdisk_gb > old_d else (-1 if r.maxdisk_gb < old_d else 0)
-            )
-            r.maxdiskread_trend = (
-                1
-                if r.maxdiskread_gb > old_dr
-                else (-1 if r.maxdiskread_gb < old_dr else 0)
-            )
-            r.gpu_mem_trend = (
-                1 if r.gpu_mem_gb > old_g else (-1 if r.gpu_mem_gb < old_g else 0)
-            )
+        previous = old_snapshots.get(r.jobid, {})
+        if not isinstance(previous, dict):
+            continue
+
+        prev_ts = _safe_float(previous.get("ts"), 0.0)
+        dt = now - prev_ts
+        if dt <= 0 or dt > MAX_DELTA_WINDOW_SECONDS:
+            continue
+
+        prev_cpu = _safe_float(previous.get("cpu_eff_pct"), 0.0)
+        prev_rss = _safe_float(previous.get("maxrss_gb"), 0.0)
+        prev_gpu_pct = _safe_float(previous.get("gpu_vram_pct"), 0.0)
+        prev_pages = _safe_float(previous.get("maxpages"), 0.0)
+        prev_disk = _safe_float(previous.get("maxdisk_gb"), 0.0)
+        prev_disk_read = _safe_float(previous.get("maxdiskread_gb"), 0.0)
+        prev_pages_rate = _optional_float(previous.get("maxpages_rate_per_sec"))
+        prev_disk_rate = _optional_float(previous.get("maxdisk_rate_gb_per_sec"))
+        prev_disk_read_rate = _optional_float(
+            previous.get("maxdiskread_rate_gb_per_sec")
+        )
+
+        r.cpu_eff_change_pct = _pct_change(r.cpu_eff_pct, prev_cpu)
+        r.maxrss_change_pct = _pct_change(r.maxrss_gb, prev_rss)
+        r.gpu_vram_change_pct = _pct_change(_gpu_vram_pct(r), prev_gpu_pct)
+
+        r.maxpages_delta = float(r.maxpages) - prev_pages
+        r.maxdisk_delta_gb = r.maxdisk_gb - prev_disk
+        r.maxdiskread_delta_gb = r.maxdiskread_gb - prev_disk_read
+
+        if r.maxpages_delta < -EPSILON:
+            r.maxpages_reset = True
+            r.maxpages_trend = 0
+            r.maxpages_rate_per_sec = 0.0
+            r.maxpages_rate_change_pct = None
+        else:
+            r.maxpages_trend = 1 if r.maxpages_delta > EPSILON else 0
+            r.maxpages_rate_per_sec = max(0.0, r.maxpages_delta / dt)
+            if prev_pages_rate is not None:
+                r.maxpages_rate_change_pct = _pct_change(
+                    r.maxpages_rate_per_sec, prev_pages_rate
+                )
+
+        if r.maxdisk_delta_gb < -EPSILON:
+            r.maxdisk_reset = True
+            r.maxdisk_trend = 0
+            r.maxdisk_rate_gb_per_sec = 0.0
+            r.maxdisk_rate_change_pct = None
+        else:
+            r.maxdisk_trend = 1 if r.maxdisk_delta_gb > EPSILON else 0
+            r.maxdisk_rate_gb_per_sec = max(0.0, r.maxdisk_delta_gb / dt)
+            if prev_disk_rate is not None:
+                r.maxdisk_rate_change_pct = _pct_change(
+                    r.maxdisk_rate_gb_per_sec, prev_disk_rate
+                )
+
+        if r.maxdiskread_delta_gb < -EPSILON:
+            r.maxdiskread_reset = True
+            r.maxdiskread_trend = 0
+            r.maxdiskread_rate_gb_per_sec = 0.0
+            r.maxdiskread_rate_change_pct = None
+        else:
+            r.maxdiskread_trend = 1 if r.maxdiskread_delta_gb > EPSILON else 0
+            r.maxdiskread_rate_gb_per_sec = max(0.0, r.maxdiskread_delta_gb / dt)
+            if prev_disk_read_rate is not None:
+                r.maxdiskread_rate_change_pct = _pct_change(
+                    r.maxdiskread_rate_gb_per_sec, prev_disk_read_rate
+                )
+
+    current_snapshots: Dict[str, Dict[str, float]] = {}
+    for r in rows:
+        if r.state != "RUNNING":
+            continue
+        current_snapshots[r.jobid] = {
+            "ts": now,
+            "cpu_eff_pct": r.cpu_eff_pct,
+            "maxrss_gb": r.maxrss_gb,
+            "gpu_vram_pct": _gpu_vram_pct(r),
+            "maxpages": float(r.maxpages),
+            "maxdisk_gb": r.maxdisk_gb,
+            "maxdiskread_gb": r.maxdiskread_gb,
+            "maxpages_rate_per_sec": r.maxpages_rate_per_sec,
+            "maxdisk_rate_gb_per_sec": r.maxdisk_rate_gb_per_sec,
+            "maxdiskread_rate_gb_per_sec": r.maxdiskread_rate_gb_per_sec,
+        }
+
+    cache["metric_snapshot"] = {"jobs": current_snapshots}
+    write_cache(cache)
 
     console.print(build_table(rows, args.headroom))
