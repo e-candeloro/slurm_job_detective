@@ -10,6 +10,7 @@ from sjdet.cache import clear_cache, read_cache, write_cache
 from sjdet.display import build_table
 from sjdet.slurm import (
     LiveRow,
+    SlurmCommandNotFoundError,
     list_live_squeue,
     metric_to_gb,
     parse_gres_gpu_count,
@@ -24,6 +25,13 @@ from sjdet.slurm import (
 from sjdet.update import maybe_update_notice, run_update_chain
 
 console = Console()
+
+
+def print_slurm_missing_warning(command: str) -> None:
+    console.print(
+        f"[yellow]Warning: SLURM command '{command}' was not found in PATH.[/yellow]"
+    )
+    console.print("[yellow]Are you connected to a SLURM cluster?[/yellow]")
 
 
 def main() -> None:
@@ -90,7 +98,12 @@ def main() -> None:
 
     min_interval = max(60, args.interval)
 
-    live = list_live_squeue(user)
+    try:
+        live = list_live_squeue(user)
+    except SlurmCommandNotFoundError as exc:
+        print_slurm_missing_warning(exc.command)
+        return
+
     if not live:
         console.print("[yellow]No RUNNING or PENDING jobs found.[/yellow]")
         return
@@ -127,7 +140,11 @@ def main() -> None:
         {n for n in gpu_nodes if n not in cached_node_info or args.force_update_nodes}
     )
     if missing_nodes:
-        cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
+        try:
+            cached_node_info.update(scontrol_node_gpu_info(missing_nodes))
+        except SlurmCommandNotFoundError as exc:
+            print_slurm_missing_warning(exc.command)
+            return
 
     for r in rows:
         if r.node in cached_node_info:
@@ -144,7 +161,11 @@ def main() -> None:
     sstat_data = old_data if use_cache else {}
 
     if running_ids and not use_cache:
-        sstat_data = sstat_batch(running_ids)
+        try:
+            sstat_data = sstat_batch(running_ids)
+        except SlurmCommandNotFoundError as exc:
+            print_slurm_missing_warning(exc.command)
+            return
         cache.update(
             {
                 "ts": now,

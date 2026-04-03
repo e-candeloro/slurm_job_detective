@@ -203,10 +203,16 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
     t.add_column("Elapsed", justify="center", vertical="middle")
     if has_gpu:
         t.add_column("Node", justify="center", no_wrap=True, vertical="middle")
-        t.add_column("GPU Util", justify="center", no_wrap=True, vertical="middle")
-    t.add_column("CPU Util", justify="center", vertical="middle")
-    t.add_column("Mem Util", justify="center", no_wrap=True, vertical="middle")
-    t.add_column("Suggest GB", justify="center", vertical="middle")
+        t.add_column("Cpu Eff %", justify="center", vertical="middle")
+        t.add_column("GPU VRAM %", justify="center", no_wrap=True, vertical="middle")
+        t.add_column(
+            "RAM Max Util %", justify="center", no_wrap=True, vertical="middle"
+        )
+    else:
+        t.add_column("Cpu Eff %", justify="center", vertical="middle")
+        t.add_column(
+            "RAM Max Util %", justify="center", no_wrap=True, vertical="middle"
+        )
     t.add_column("MaxPages", justify="center", vertical="middle")
     t.add_column("MaxDiskWr", justify="center", vertical="middle")
 
@@ -250,6 +256,7 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
                 r.gpu_count, r.gpu_type, 0.0, 0.0, r.gpu_total_gb, running=False
             )
 
+        _ = sugg
         row_cells = [
             Text(r.jobid),
             Text(r.name),
@@ -257,7 +264,9 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
             Text(r.elapsed),
         ]
         if has_gpu:
-            row_cells += [Text(r.node or "-"), gpu]
-        row_cells += [cpu_combined, mem_combined, sugg, pages, disk]
+            row_cells += [Text(r.node or "-"), cpu_combined, gpu, mem_combined]
+        else:
+            row_cells += [cpu_combined, mem_combined]
+        row_cells += [pages, disk]
         t.add_row(*[centered_cell(cell) for cell in row_cells])
     return t
