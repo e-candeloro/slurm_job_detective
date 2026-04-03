@@ -193,6 +193,7 @@ def main() -> None:
 
         r.maxrss_gb = metric_to_gb(d.get("maxrss"), "K")
         r.maxdisk_gb = metric_to_gb(d.get("maxdisk"), "B")
+        r.maxdiskread_gb = metric_to_gb(d.get("maxdiskread"), "B")
         r.maxpages = parse_pages(d.get("maxpages"))
 
         tres = d.get("tres_in_max", "")
@@ -215,6 +216,7 @@ def main() -> None:
         if not use_cache and r.jobid in old_data:
             old_p = parse_pages(old_data[r.jobid].get("maxpages"))
             old_d = metric_to_gb(old_data[r.jobid].get("maxdisk"), "B")
+            old_dr = metric_to_gb(old_data[r.jobid].get("maxdiskread"), "B")
             old_g = metric_to_gb(
                 parse_tres_value(
                     old_data[r.jobid].get("tres_in_max", ""), "gres/gpumem"
@@ -226,6 +228,11 @@ def main() -> None:
             )
             r.maxdisk_trend = (
                 1 if r.maxdisk_gb > old_d else (-1 if r.maxdisk_gb < old_d else 0)
+            )
+            r.maxdiskread_trend = (
+                1
+                if r.maxdiskread_gb > old_dr
+                else (-1 if r.maxdiskread_gb < old_dr else 0)
             )
             r.gpu_mem_trend = (
                 1 if r.gpu_mem_gb > old_g else (-1 if r.gpu_mem_gb < old_g else 0)

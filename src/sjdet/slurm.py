@@ -162,6 +162,8 @@ class LiveRow:
     maxpages_trend: int = 0
     maxdisk_gb: float = 0.0
     maxdisk_trend: int = 0
+    maxdiskread_gb: float = 0.0
+    maxdiskread_trend: int = 0
     node: str = ""
     gpu_count: int = 0  # GPUs allocated (from squeue %b)
     gpu_type: str = ""  # GPU model if available (e.g. 'a100')
@@ -266,15 +268,29 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
     jlist = ",".join(jobids)
     rows = run(
         f"sstat -j {shlex.quote(jlist)} --noheader --parsable2 "
-        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,TRESUsageInMax"
+        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,MaxDiskRead,TRESUsageInMax"
     )
     result = {}
     for ln in rows.splitlines():
         parts = ln.split("|")
         if len(parts) < 6:
             continue
+
         jobstep, avecpu, ntasks, mrss, mpages, mdisk = parts[:6]
-        tres = parts[6].strip() if len(parts) > 6 else ""
+        mdiskread = ""
+        tres = ""
+
+        if len(parts) > 7:
+            mdiskread = parts[6].strip()
+            tres = parts[7].strip()
+        elif len(parts) == 7:
+            # Backward compatibility for old output shape without MaxDiskRead.
+            candidate = parts[6].strip()
+            if "=" in candidate or "gres/" in candidate:
+                tres = candidate
+            else:
+                mdiskread = candidate
+
         jid = jobstep.split(".")[0]
         result[jid] = {
             "avecpu": avecpu.strip(),
@@ -282,6 +298,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
             "maxrss": mrss.strip(),
             "maxpages": mpages.strip(),
             "maxdisk": mdisk.strip(),
+            "maxdiskread": mdiskread,
             "tres_in_max": tres,
         }
     return result

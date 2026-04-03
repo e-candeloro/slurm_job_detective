@@ -21,6 +21,8 @@ This file gives coding agents the minimum repository-specific context needed to 
 ## Documentation Links
 
 - For user-facing usage and installation details, prefer linking to `README.md` instead of repeating large sections.
+- SLURM stats reference (sstat): https://slurm.schedmd.com/sstat.html
+- Local sstat notes for this repo: `SLURM_SSTAT_REFERENCE.md`
 - Keep this file focused on agent-critical development behavior and repository conventions.
 
 ## Project Layout
