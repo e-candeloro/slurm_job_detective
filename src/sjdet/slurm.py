@@ -4,7 +4,26 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+
+SLURM_BINARIES = {
+    "squeue",
+    "sstat",
+    "scontrol",
+    "sacct",
+    "sinfo",
+    "srun",
+    "sbatch",
+    "salloc",
+    "scancel",
+}
+
+
+class SlurmCommandNotFoundError(RuntimeError):
+    def __init__(self, command: str) -> None:
+        self.command = command
+        super().__init__(f"SLURM command not found: {command}")
 
 
 # ----------------------------- shell utils ----------------------------- #
@@ -12,13 +31,23 @@ from typing import Dict, List, Tuple
 
 def run(cmd: str) -> str:
     """Run a shell command and return stdout (stripped)."""
-    out = subprocess.run(
-        shlex.split(cmd),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-        check=False,
-    )
+    args = shlex.split(cmd)
+    if not args:
+        return ""
+
+    try:
+        out = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        command = args[0].rsplit("/", 1)[-1]
+        if command in SLURM_BINARIES:
+            raise SlurmCommandNotFoundError(command) from exc
+        raise
     return out.stdout.strip()
 
 
@@ -97,7 +126,7 @@ def parse_tres_value(tres: str, key: str) -> str:
 
     e.g. parse_tres_value('gres/gpumem=4096,gres/gpuutil=72', 'gres/gpumem') -> '4096'
     """
-    m = re.search(rf'(?:^|,){re.escape(key)}=([^,\s]+)', tres or "")
+    m = re.search(rf"(?:^|,){re.escape(key)}=([^,\s]+)", tres or "")
     return m.group(1) if m else ""
 
 
@@ -106,13 +135,13 @@ def parse_gres_gpu_count(gres: str) -> int:
 
     Handles 'gres/gpu:1' and 'gres/gpu:a100:2' formats.
     """
-    m = re.search(r'gres/gpu(?::[a-zA-Z0-9_]+)?:(\d+)', gres or "")
+    m = re.search(r"gres/gpu(?::[a-zA-Z0-9_]+)?:(\d+)", gres or "")
     return int(m.group(1)) if m else 0
 
 
 def parse_gres_gpu_type(gres: str) -> str:
     """Extract GPU type from GRES string, e.g. 'a100' from 'gres/gpu:a100:2'."""
-    m = re.search(r'gres/gpu:([a-zA-Z][a-zA-Z0-9_]*)?:(\d+)', gres or "")
+    m = re.search(r"gres/gpu:([a-zA-Z][a-zA-Z0-9_]*)?:(\d+)", gres or "")
     return m.group(1) if m else ""
 
 
@@ -131,21 +160,44 @@ class LiveRow:
     cpu_eff_pct: float = 0.0
     maxpages: int = 0
     maxpages_trend: int = 0
+    maxpages_delta: float = 0.0
+    maxpages_rate_per_sec: float = 0.0
+    maxpages_rate_change_pct: Optional[float] = None
+    maxpages_reset: bool = False
     maxdisk_gb: float = 0.0
     maxdisk_trend: int = 0
+    maxdisk_delta_gb: float = 0.0
+    maxdisk_rate_gb_per_sec: float = 0.0
+    maxdisk_rate_change_pct: Optional[float] = None
+    maxdisk_reset: bool = False
+    maxdiskread_gb: float = 0.0
+    maxdiskread_trend: int = 0
+    maxdiskread_delta_gb: float = 0.0
+    maxdiskread_rate_gb_per_sec: float = 0.0
+    maxdiskread_rate_change_pct: Optional[float] = None
+    maxdiskread_reset: bool = False
+    cpu_eff_change_pct: Optional[float] = None
+    maxrss_change_pct: Optional[float] = None
+    gpu_vram_change_pct: Optional[float] = None
     node: str = ""
-    gpu_count: int = 0       # GPUs allocated (from squeue %b)
-    gpu_type: str = ""       # GPU model if available (e.g. 'a100')
+    gpu_count: int = 0  # GPUs allocated (from squeue %b)
+    gpu_type: str = ""  # GPU model if available (e.g. 'a100')
     gpu_mem_gb: float = 0.0  # VRAM used in GB (from sstat TRESUsageInMax gres/gpumem)
-    gpu_util_pct: float = 0.0  # GPU utilization % (from sstat TRESUsageInMax gres/gpuutil)
-    gpu_total_gb: float = 0.0  # total VRAM per GPU from node features (e.g. gpu_A40_45G → 45)
-    gpu_mem_trend: int = 0   # +1 ↑, -1 ↓, 0 — compared to previous poll
+    gpu_util_pct: float = (
+        0.0  # GPU utilization % (from sstat TRESUsageInMax gres/gpuutil)
+    )
+    gpu_total_gb: float = (
+        0.0  # total VRAM per GPU from node features (e.g. gpu_A40_45G → 45)
+    )
+    gpu_mem_trend: int = 0  # +1 ↑, -1 ↓, 0 — compared to previous poll
 
 
 # ----------------------------- SLURM helpers ----------------------------- #
 
 
-def list_live_squeue(user: str) -> List[Tuple[str, str, str, int, float, str, str, str]]:
+def list_live_squeue(
+    user: str,
+) -> List[Tuple[str, str, str, int, float, str, str, str]]:
     out = run(f'squeue -u {shlex.quote(user)} -h -o "%i|%T|%M|%C|%m|%j|%N|%b"')
     rows = []
     for line in out.splitlines():
@@ -182,40 +234,40 @@ def scontrol_node_gpu_info(nodes: List[str]) -> Dict[str, Tuple[str, float]]:
     out = run(f"scontrol show node {shlex.quote(nodelist)}")
 
     result: Dict[str, Tuple[str, float]] = {}
-    node_blocks = re.split(r'(?=NodeName=)', out)
-    
+    node_blocks = re.split(r"(?=NodeName=)", out)
+
     for block in node_blocks:
-        nm = re.search(r'NodeName=(\S+)', block)
+        nm = re.search(r"NodeName=(\S+)", block)
         if not nm:
             continue
         current_node = nm.group(1)
-        
+
         # Try standard format like AvailableFeatures=gpu_A40_45G
-        fm = re.search(r'AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)_(\d+)G\b', block)
+        fm = re.search(r"AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)_(\d+)G\b", block)
         if fm:
             model = fm.group(1).replace("_", " ")
             vram_gb = float(fm.group(2))
             result[current_node] = (model, vram_gb)
             continue
-            
+
         # Try generic patterns in the block
         vram = 0.0
         # Search for sequences like 40GB, 80_GB, 45G, etc in AvailableFeatures or Gres
-        vm = re.search(r'\b(\d+)_?GB\b', block, re.IGNORECASE)
+        vm = re.search(r"\b(\d+)_?GB\b", block, re.IGNORECASE)
         if vm:
             vram = float(vm.group(1))
         else:
-            vm = re.search(r'\b(?i:vram)_?(\d+)G\b', block, re.IGNORECASE)
+            vm = re.search(r"\b(?i:vram)_?(\d+)G\b", block, re.IGNORECASE)
             if vm:
                 vram = float(vm.group(1))
 
         # Try to guess model from Gres like gpu:a100:2
         model = ""
-        gm = re.search(r'Gres=[^\s]*\bgpu:([A-Za-z0-9_]+):', block)
+        gm = re.search(r"Gres=[^\s]*\bgpu:([A-Za-z0-9_]+):", block)
         if gm:
             model = gm.group(1).replace("_", " ")
         else:
-            gm2 = re.search(r'AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)\b', block)
+            gm2 = re.search(r"AvailableFeatures=[^\s]*\bgpu_([A-Za-z0-9_]+)\b", block)
             if gm2:
                 model = gm2.group(1).replace("_", " ")
 
@@ -231,15 +283,29 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
     jlist = ",".join(jobids)
     rows = run(
         f"sstat -j {shlex.quote(jlist)} --noheader --parsable2 "
-        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,TRESUsageInMax"
+        f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,MaxDiskRead,TRESUsageInMax"
     )
     result = {}
     for ln in rows.splitlines():
         parts = ln.split("|")
         if len(parts) < 6:
             continue
+
         jobstep, avecpu, ntasks, mrss, mpages, mdisk = parts[:6]
-        tres = parts[6].strip() if len(parts) > 6 else ""
+        mdiskread = ""
+        tres = ""
+
+        if len(parts) > 7:
+            mdiskread = parts[6].strip()
+            tres = parts[7].strip()
+        elif len(parts) == 7:
+            # Backward compatibility for old output shape without MaxDiskRead.
+            candidate = parts[6].strip()
+            if "=" in candidate or "gres/" in candidate:
+                tres = candidate
+            else:
+                mdiskread = candidate
+
         jid = jobstep.split(".")[0]
         result[jid] = {
             "avecpu": avecpu.strip(),
@@ -247,6 +313,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
             "maxrss": mrss.strip(),
             "maxpages": mpages.strip(),
             "maxdisk": mdisk.strip(),
+            "maxdiskread": mdiskread,
             "tres_in_max": tres,
         }
     return result
