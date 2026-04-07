@@ -147,12 +147,15 @@ uv run sjdet
 
 ```
 src/sjdet/
+├── __init__.py ← package marker
+├── __main__.py ← module entry point
 ├── cli.py      ← argument parsing + main() orchestration
 ├── slurm.py    ← squeue/sstat/scontrol calls, data model, parsing
 ├── display.py  ← rich table, progress bars, color logic
-└── cache.py    ← local JSON cache (throttles sstat + persists node info)
+├── cache.py    ← local JSON cache (throttles sstat + persists node info)
+└── update.py   ← upstream version check + upgrade commands
 scripts/
 ├── gpu_load_test.py  ← dev tool to burn VRAM and verify GPU column
-└── mock_cli.py ← dev tool to test the CLI without the access of a SLURM scheduler
+└── mock_cli.py ← dev tool to test the CLI without access to a SLURM scheduler
 ```
 
