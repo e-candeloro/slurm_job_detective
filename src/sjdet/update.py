@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 GITHUB_OWNER = "e-candeloro"
 GITHUB_REPO = "slurm_job_detective"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}"
+GITHUB_LATEST_RELEASE_API = f"{GITHUB_API}/releases/latest"
 GIT_INSTALL_URL = f"git+https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}.git"
 
 UPDATE_CHECK_TTL_SECONDS = 24 * 60 * 60
@@ -61,20 +62,6 @@ def _parse_semver_like(v: str) -> Optional[Tuple[int, int, int, int, int]]:
     return major, minor, patch, stage_rank, stage_num
 
 
-def _installed_commit() -> str:
-    try:
-        dist = metadata.distribution("slurm-job-detective")
-        direct_url = dist.read_text("direct_url.json")
-        if not direct_url:
-            return ""
-        data = json.loads(direct_url)
-        vcs = data.get("vcs_info", {})
-        commit_id = vcs.get("commit_id", "")
-        return commit_id.strip()
-    except Exception:
-        return ""
-
-
 def _installed_version() -> str:
     try:
         return metadata.version("slurm-job-detective")
@@ -82,87 +69,53 @@ def _installed_version() -> str:
         return "0.0.0"
 
 
-def _latest_remote_reference() -> Dict[str, str]:
-    # 1) Prefer GitHub release tag when available.
-    rel = _http_get_json(f"{GITHUB_API}/releases/latest")
+def _normalize_version(v: str) -> str:
+    return re.sub(r"^v", "", (v or "").strip(), flags=re.IGNORECASE)
+
+
+def _latest_release_reference() -> Dict[str, str]:
+    """Return latest GitHub release information only.
+
+    This intentionally avoids tags/commit fallbacks so update checks and
+    upgrades always target the latest published release version.
+    """
+    rel = _http_get_json(GITHUB_LATEST_RELEASE_API)
     if isinstance(rel, dict):
         tag_name = str(rel.get("tag_name", "")).strip()
         if tag_name:
             return {
                 "kind": "release",
                 "ref": tag_name,
+                "version": _normalize_version(tag_name),
                 "url": str(rel.get("html_url", "")).strip(),
             }
 
-    # 2) Fall back to first tag if releases are missing.
-    tags = _http_get_json(f"{GITHUB_API}/tags")
-    if isinstance(tags, list) and tags:
-        first = tags[0]
-        if isinstance(first, dict):
-            tag_name = str(first.get("name", "")).strip()
-            commit = first.get("commit", {})
-            commit_sha = ""
-            if isinstance(commit, dict):
-                commit_sha = str(commit.get("sha", "")).strip()
-            if tag_name:
-                return {
-                    "kind": "tag",
-                    "ref": tag_name,
-                    "url": f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag_name}",
-                    "commit": commit_sha,
-                }
-
-    # 3) Last fallback: default branch head commit.
-    repo_meta = _http_get_json(GITHUB_API)
-    default_branch = "master"
-    if isinstance(repo_meta, dict):
-        default_branch = (
-            str(repo_meta.get("default_branch", "master")).strip() or "master"
-        )
-
-    commit = _http_get_json(f"{GITHUB_API}/commits/{default_branch}")
-    if isinstance(commit, dict):
-        sha = str(commit.get("sha", "")).strip()
-        html_url = str(commit.get("html_url", "")).strip()
-        if sha:
-            return {
-                "kind": "commit",
-                "ref": sha,
-                "url": html_url,
-                "branch": default_branch,
-            }
-
-    return {"kind": "unknown", "ref": "", "url": ""}
+    return {"kind": "unknown", "ref": "", "version": "", "url": ""}
 
 
 def check_for_update() -> Dict[str, object]:
-    remote = _latest_remote_reference()
+    remote = _latest_release_reference()
     kind = str(remote.get("kind", "unknown"))
     remote_ref = str(remote.get("ref", ""))
+    target_version = str(remote.get("version", ""))
 
-    local_version = _installed_version()
-    local_version_tuple = _parse_semver_like(local_version)
-    remote_version_tuple = _parse_semver_like(remote_ref)
-    local_commit = _installed_commit()
+    current_version = _installed_version()
+    current_version_tuple = _parse_semver_like(current_version)
+    remote_version_tuple = _parse_semver_like(target_version)
 
     available = False
-    compare_mode = "unknown"
-
-    if kind in {"release", "tag"} and local_version_tuple and remote_version_tuple:
-        compare_mode = "version"
-        available = remote_version_tuple > local_version_tuple
-    elif kind == "commit" and local_commit:
-        compare_mode = "commit"
-        available = remote_ref != local_commit
+    if kind == "release" and current_version_tuple and remote_version_tuple:
+        available = remote_version_tuple > current_version_tuple
 
     return {
         "last_check_ts": time.time(),
         "remote_kind": kind,
         "remote_ref": remote_ref,
         "remote_url": str(remote.get("url", "")),
-        "compare_mode": compare_mode,
-        "local_version": local_version,
-        "local_commit": local_commit,
+        "compare_mode": "version",
+        "current_version": current_version,
+        "local_version": current_version,
+        "target_version": target_version,
         "available": available,
     }
 
@@ -183,19 +136,42 @@ def maybe_update_notice(
         last_notice = float(update_meta.get("last_notice_ts", 0) or 0)
         if now - last_notice >= UPDATE_NOTICE_COOLDOWN_SECONDS:
             update_meta["last_notice_ts"] = now
-            remote_kind = str(update_meta.get("remote_kind", "update"))
-            remote_ref = str(update_meta.get("remote_ref", ""))
-            target = f"{remote_kind} {remote_ref}".strip()
-            notice = f"Update available ({target}). Run 'sjdet --update' to upgrade."
+            current_version = str(
+                update_meta.get("current_version", update_meta.get("local_version", ""))
+            )
+            target_version = str(
+                update_meta.get("target_version", update_meta.get("remote_ref", ""))
+            )
+            notice = (
+                f"Update available: {current_version} -> {target_version}. "
+                "Run 'sjdet --update' to upgrade."
+            )
 
     return notice, update_meta
 
 
-def run_update_chain() -> Dict[str, object]:
+def run_update_chain(
+    target_version: str, current_version: Optional[str] = None
+) -> Dict[str, object]:
+    target_version = _normalize_version(target_version)
+    current_version = _normalize_version(current_version or _installed_version())
+    if not target_version:
+        return {
+            "success": False,
+            "command": "",
+            "output": "missing target version",
+            "attempts": [],
+            "from_version": current_version,
+            "to_version": target_version,
+        }
+
+    target_tag = f"v{target_version}"
+    versioned_git_url = f"{GIT_INSTALL_URL}@{target_tag}"
+
     commands: List[List[str]] = [
-        ["uv", "tool", "upgrade", "slurm-job-detective"],
-        ["pipx", "upgrade", "slurm-job-detective"],
-        [sys.executable, "-m", "pip", "install", "--upgrade", GIT_INSTALL_URL],
+        ["uv", "tool", "install", "--upgrade", versioned_git_url],
+        ["pipx", "install", "--force", versioned_git_url],
+        [sys.executable, "-m", "pip", "install", "--upgrade", versioned_git_url],
     ]
 
     attempts: List[Dict[str, object]] = []
@@ -224,6 +200,8 @@ def run_update_chain() -> Dict[str, object]:
                     "command": cmd_label,
                     "output": output.strip()[:3000],
                     "attempts": attempts,
+                    "from_version": current_version,
+                    "to_version": target_version,
                 }
         except FileNotFoundError:
             attempts.append(
@@ -248,4 +226,6 @@ def run_update_chain() -> Dict[str, object]:
         "command": last.get("command", ""),
         "output": str(last.get("output", "")),
         "attempts": attempts,
+        "from_version": current_version,
+        "to_version": target_version,
     }

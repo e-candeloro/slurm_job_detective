@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from importlib import metadata
 from typing import Dict, Optional
 
 from rich.console import Console
@@ -23,11 +24,18 @@ from sjdet.slurm import (
     sstat_batch,
     to_seconds,
 )
-from sjdet.update import maybe_update_notice, run_update_chain
+from sjdet.update import check_for_update, maybe_update_notice, run_update_chain
 
 console = Console()
 MAX_DELTA_WINDOW_SECONDS = 24 * 60 * 60
 EPSILON = 1e-9
+
+
+def _installed_version() -> str:
+    try:
+        return metadata.version("slurm-job-detective")
+    except Exception:
+        return "0.0.0"
 
 
 def _clamp_pct(pct: float) -> float:
@@ -69,6 +77,12 @@ def print_slurm_missing_warning(command: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"sjdet {_installed_version()}",
+    )
     parser.add_argument("--user", default=os.getenv("USER", ""))
     parser.add_argument("--max-jobs", type=int, default=10)
     parser.add_argument("--interval", type=int, default=60)
@@ -94,26 +108,48 @@ def main() -> None:
 
     cache = read_cache()
     if args.update:
-        result = run_update_chain()
+        update_check = check_for_update()
+        current_version = str(update_check.get("current_version", _installed_version()))
+        target_version = str(update_check.get("target_version", ""))
+
+        if not target_version:
+            console.print("[red]Could not determine latest release version.[/red]")
+            return
+
+        if not bool(update_check.get("available")):
+            console.print(
+                f"[green]sjdet is already up to date ({current_version}).[/green]"
+            )
+            return
+
+        result = run_update_chain(target_version, current_version=current_version)
         update_meta = cache.get("update", {})
         if not isinstance(update_meta, dict):
             update_meta = {}
         now_update = time.time()
+        updated_from = str(result.get("from_version", current_version))
+        updated_to = str(result.get("to_version", target_version))
         update_meta.update(
             {
                 "last_update_attempt_ts": now_update,
                 "last_update_success": bool(result.get("success")),
                 "last_update_command": str(result.get("command", "")),
                 "last_update_output": str(result.get("output", ""))[:3000],
+                "last_update_from_version": updated_from,
+                "last_update_to_version": updated_to,
             }
         )
         cache["update"] = update_meta
         write_cache(cache)
 
         if result.get("success"):
-            console.print("[green]sjdet updated successfully.[/green]")
+            console.print(
+                f"[green]sjdet updated successfully: {updated_from} -> {updated_to}.[/green]"
+            )
         else:
-            console.print("[red]Failed to update sjdet automatically.[/red]")
+            console.print(
+                f"[red]Failed to update sjdet automatically ({updated_from} -> {updated_to}).[/red]"
+            )
             attempts = result.get("attempts", [])
             if isinstance(attempts, list):
                 for item in attempts:

@@ -75,6 +75,7 @@ sjdet --interval 120              # minimum seconds between sstat polls (default
 sjdet --headroom 0.30             # memory suggestion headroom: ceil(MaxRSS × 1.30) (default: 20%)
 sjdet --force-update-nodes        # forces an update to the node info cache
 sjdet --clear-cache               # clears the local user cache completely and exits
+sjdet --version                   # print installed version and exit
 sjdet --update                    # upgrades sjdet and exits
 ```
 
@@ -83,19 +84,18 @@ sjdet --update                    # upgrades sjdet and exits
 - Normal runs perform a lightweight upstream update check and print a notice when a newer version is detected.
 - Notices are cached to avoid spam (cooldown: 7 days).
 - `sjdet` does not prompt interactively for updates during normal runs.
-- `sjdet --update` performs the upgrade immediately.
+- Update notices show `current_version -> target_version`.
+- `sjdet --update` upgrades directly to the latest published GitHub release version.
 
 Update-source strategy:
 
-1. GitHub latest release
-2. GitHub tags
-3. Default branch head commit (fallback when releases/tags are missing)
+1. GitHub latest release only
 
 Update-command strategy for `--update`:
 
-1. `uv tool upgrade slurm-job-detective`
-2. `pipx upgrade slurm-job-detective`
-3. `python -m pip install --upgrade git+https://github.com/e-candeloro/slurm_job_detective.git`
+1. `uv tool install --upgrade git+https://github.com/e-candeloro/slurm_job_detective.git@v<latest_version>`
+2. `pipx install --force git+https://github.com/e-candeloro/slurm_job_detective.git@v<latest_version>`
+3. `python -m pip install --upgrade git+https://github.com/e-candeloro/slurm_job_detective.git@v<latest_version>`
 
 **Reading the GPU column:**
 - 🔴 red = low VRAM usage (you over-requested or the job hasn't loaded yet)
