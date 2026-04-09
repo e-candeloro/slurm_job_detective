@@ -145,6 +145,23 @@ def parse_gres_gpu_type(gres: str) -> str:
     return m.group(1) if m else ""
 
 
+def _safe_int(s: str) -> int:
+    try:
+        return int((s or "").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _tres_score(tres: str) -> Tuple[float, float, int]:
+    """Score TRESUsageInMax strings to keep the most informative step row."""
+    gpu_mem = metric_to_gb(parse_tres_value(tres, "gres/gpumem"), "B")
+    try:
+        gpu_util = float(parse_tres_value(tres, "gres/gpuutil") or 0)
+    except ValueError:
+        gpu_util = 0.0
+    return gpu_mem, gpu_util, len((tres or "").strip())
+
+
 # ----------------------------- data model ----------------------------- #
 
 
@@ -285,7 +302,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
         f"sstat -j {shlex.quote(jlist)} --noheader --parsable2 "
         f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,MaxDiskRead,TRESUsageInMax"
     )
-    result = {}
+    result: Dict[str, Dict[str, str]] = {}
     for ln in rows.splitlines():
         parts = ln.split("|")
         if len(parts) < 6:
@@ -307,7 +324,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
                 mdiskread = candidate
 
         jid = jobstep.split(".")[0]
-        result[jid] = {
+        row = {
             "avecpu": avecpu.strip(),
             "ntasks": ntasks.strip(),
             "maxrss": mrss.strip(),
@@ -316,4 +333,55 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
             "maxdiskread": mdiskread,
             "tres_in_max": tres,
         }
+
+        merged = result.setdefault(
+            jid,
+            {
+                "avecpu": "",
+                "ntasks": "0",
+                "maxrss": "",
+                "maxpages": "",
+                "maxdisk": "",
+                "maxdiskread": "",
+                "tres_in_max": "",
+            },
+        )
+
+        has_payload = any(
+            row[k] not in {"", "UNKNOWN"}
+            for k in ("maxrss", "maxpages", "maxdisk", "maxdiskread", "tres_in_max")
+        )
+
+        # sstat may emit multiple lines per job (e.g. .batch/.extern/.0).
+        # Keep per-field maxima so sparse rows cannot erase real usage.
+        if has_payload and (
+            not merged["avecpu"]
+            or to_seconds(row["avecpu"]) > to_seconds(merged["avecpu"])
+        ):
+            merged["avecpu"] = row["avecpu"]
+        if _safe_int(row["ntasks"]) > _safe_int(merged["ntasks"]):
+            merged["ntasks"] = row["ntasks"]
+        if row["maxrss"] and (
+            not merged["maxrss"]
+            or metric_to_gb(row["maxrss"], "K") > metric_to_gb(merged["maxrss"], "K")
+        ):
+            merged["maxrss"] = row["maxrss"]
+        if row["maxpages"] and (
+            not merged["maxpages"]
+            or parse_pages(row["maxpages"]) > parse_pages(merged["maxpages"])
+        ):
+            merged["maxpages"] = row["maxpages"]
+        if row["maxdisk"] and (
+            not merged["maxdisk"]
+            or metric_to_gb(row["maxdisk"], "B") > metric_to_gb(merged["maxdisk"], "B")
+        ):
+            merged["maxdisk"] = row["maxdisk"]
+        if row["maxdiskread"] and (
+            not merged["maxdiskread"]
+            or metric_to_gb(row["maxdiskread"], "B")
+            > metric_to_gb(merged["maxdiskread"], "B")
+        ):
+            merged["maxdiskread"] = row["maxdiskread"]
+        if _tres_score(row["tres_in_max"]) > _tres_score(merged["tres_in_max"]):
+            merged["tres_in_max"] = row["tres_in_max"]
     return result

@@ -1,4 +1,4 @@
-__version__ = "0.1.0a2"
+__version__ = "0.1.0a3"
 
 from sjdet.cli import main  # re-exported for `sjdet:main` entry point
 

@@ -1,6 +1,6 @@
 [project]
 name = "slurm-job-detective"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Live SLURM job stats: CPU efficiency, memory usage, and resource suggestions."
 readme = "README.md"
 requires-python = ">=3.10"
