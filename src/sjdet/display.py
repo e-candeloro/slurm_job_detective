@@ -43,6 +43,31 @@ def color_for_util(pct: float) -> str:
     return "green"
 
 
+def format_pct_label(pct: float) -> str:
+    p = max(0.0, min(100.0, pct))
+    if p <= 0.0:
+        return "0%"
+    if p < 0.1:
+        return "<0.1%"
+    if p < 10.0:
+        return f"{p:.1f}%"
+    return f"{p:.0f}%"
+
+
+def format_used_gb_label(gb: float) -> str:
+    g = max(0.0, gb)
+    if g <= 0.0:
+        return "0G"
+    if g < 1.0:
+        mb = g * 1024.0
+        if mb < 1.0:
+            return "<1M"
+        return f"{mb:.0f}M"
+    if g < 10.0:
+        return f"{g:.1f}G"
+    return f"{g:.0f}G"
+
+
 def inline_util_line(
     label: str, pct: float, fill_style: str, width: int = GPU_INLINE_BAR_WIDTH
 ) -> Text:
@@ -151,7 +176,7 @@ def cpu_combined_group(
 
     comp = max(0.0, min(100.0, pct))
     style = color_for_util(comp)
-    txt = Text(f"{comp:.0f}%/{cpus}c", style=style)
+    txt = Text(f"{format_pct_label(comp)}/{cpus}c", style=style)
     badge = change_badge(change_pct)
     if not show_bar:
         return Group(txt, badge) if badge.plain else Group(txt)
@@ -175,7 +200,10 @@ def mem_combined_group(
 
     pct = 100.0 * rss_gb / req_gb
     style = color_for_util(pct)
-    txt = Text(f"{pct:.0f}% {rss_gb:.0f}/{req_gb:.0f}G", style=style)
+    txt = Text(
+        f"{format_pct_label(pct)} {format_used_gb_label(rss_gb)}/{req_gb:.0f}G",
+        style=style,
+    )
     badge = change_badge(change_pct)
 
     if not show_bar:
@@ -212,14 +240,14 @@ def gpu_group(
         pct = 100.0 * gpu_mem_gb / gpu_total_gb
         vram_style = color_for_util(pct)
         vram_txt = inline_util_line(
-            f"{gpu_mem_gb:.0f}/{gpu_total_gb:.0f}G {pct:.0f}%",
+            f"{format_used_gb_label(gpu_mem_gb)}/{gpu_total_gb:.0f}G {format_pct_label(pct)}",
             pct,
             vram_style,
         )
     else:
         util = max(0.0, min(100.0, gpu_util_pct))
         util_style = color_for_util(util)
-        vram_txt = inline_util_line(f"util {util:.0f}%", util, util_style)
+        vram_txt = inline_util_line(f"util {format_pct_label(util)}", util, util_style)
 
     badge = change_badge(gpu_change_pct)
 
