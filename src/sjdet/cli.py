@@ -198,7 +198,7 @@ def main() -> None:
     )[: args.max_jobs]
 
     now = time.time()
-    joblist_key = ",".join(sorted(running_ids))
+    joblist_key = "allsteps:" + ",".join(sorted(running_ids))
     old_data = cache.get("data", {})
     snapshot_section = cache.get("metric_snapshot", {})
     if not isinstance(snapshot_section, dict):

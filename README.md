@@ -21,10 +21,9 @@ HPC clusters are expensive. Running a GPU job that uses 2% of VRAM, or a CPU job
 | What you see | What it tells you |
 |---|---|
 | **CPU eff bar** | Are your cores actually doing work, or are they idle? |
-| **Mem Use / Req + suggest** | How much RAM you're really using vs. what you requested, plus the optimal `--mem` to request next time |
-| **VRAM Use / Req** | GPU memory used vs. total, with inverted color scale — green means you're filling it up as expected |
-| **VRAM trend ↑↓** | Is VRAM growing, stable, or shrinking between polls? Catches memory leaks or loading phases |
-| **MaxPages / MaxDisk ↑↓** | Disk thrashing and page fault trends — immediately visible |
+| **RAM Max Util %** | Peak RAM observed vs. requested RAM. |
+| **GPU VRAM %** | GPU memory used vs. detected GPU memory. |
+| **MaxPages / MaxDisk** | Page fault and disk IO rates between fresh samples. |
 | **Node column** | Exactly which node your job landed on, so you can `ssh` or `srun --overlap` instantly |
 
 All of this from **two SLURM calls** (`squeue` + `sstat`), batched, with a local cache to avoid hammering the scheduler.
@@ -98,10 +97,13 @@ Update-command strategy for `--update`:
 3. `python -m pip install --upgrade git+https://github.com/e-candeloro/slurm_job_detective.git@v<latest_version>`
 
 **Reading the GPU column:**
-- 🔴 red = low VRAM usage (you over-requested or the job hasn't loaded yet)
-- 🟡 yellow = moderate usage
-- 🟢 green = using ≥ 80% of allocated VRAM (well utilized)
-- `↑` / `↓` / `-` = VRAM trend since last poll
+- Green/yellow/red follow the same utilization brackets as CPU and RAM.
+- If GPU memory is unavailable, `sjdet` falls back to GPU utilization.
+
+**Reading MaxPages / MaxDisk columns:**
+- These columns show rate changes between fresh `sstat` samples.
+- `baseline` means this run established the first comparison point.
+- Re-run after the cache interval to see measured page and disk rates.
 
 **To jump to your job's node:**
 ```bash
@@ -155,4 +157,3 @@ scripts/
 ├── gpu_load_test.py  ← dev tool to burn VRAM and verify GPU column
 └── mock_cli.py ← dev tool to test the CLI without the access of a SLURM scheduler
 ```
-

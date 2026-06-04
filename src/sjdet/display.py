@@ -146,7 +146,7 @@ def cumulative_metric_group(
     has_history: bool,
 ) -> Group:
     if not has_history:
-        return Group(Text("-", style="dim"))
+        return Group(Text("baseline", style="dim"))
 
     line1 = Text(rate_label, style="bold grey82")
     if reset:

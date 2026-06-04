@@ -299,7 +299,7 @@ def sstat_batch(jobids: List[str]) -> Dict[str, Dict[str, str]]:
         return {}
     jlist = ",".join(jobids)
     rows = run(
-        f"sstat -j {shlex.quote(jlist)} --noheader --parsable2 "
+        f"sstat -a -j {shlex.quote(jlist)} --noheader --parsable2 "
         f"--format=JobID,AveCPU,NTasks,MaxRSS,MaxPages,MaxDiskWrite,MaxDiskRead,TRESUsageInMax"
     )
     result: Dict[str, Dict[str, str]] = {}
