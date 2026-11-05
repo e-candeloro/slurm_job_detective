@@ -5,10 +5,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![SLURM](https://img.shields.io/badge/SLURM-compatible-green?logo=linux&logoColor=white)](https://slurm.schedmd.com/)
 
-> **Are you wasting GPU memory? Underusing CPUs? Thrashing disk?**  
+> **Are you wasting GPU memory? Underusing CPUs? Hammering I/O?**  
 > `sjdet` shows you instantly — one command, no environment to activate.
 
-![sjdet demo](media/demo/sjdet_demo.png)
+![sjdet demo](media/demo/sjdet_demo.gif)
 
 ---
 
@@ -20,10 +20,10 @@ HPC clusters are expensive. Running a GPU job that uses 2% of VRAM, or a CPU job
 
 | What you see | What it tells you |
 |---|---|
-| **CPU eff bar** | Are your cores actually doing work, or are they idle? |
-| **RAM Max Util %** | Peak RAM observed vs. requested RAM. |
-| **GPU VRAM %** | GPU memory used vs. detected GPU memory. |
-| **MaxPages / MaxDisk** | Page fault and disk IO rates between fresh samples. |
+| **CPU eff bar** | CPU time used by all running steps vs. elapsed time × allocated CPUs. |
+| **RAM Max Util %** | Peak RAM (summed over tasks and steps) vs. total allocated RAM. |
+| **GPU VRAM %** | GPU memory used vs. total VRAM of all allocated GPUs. |
+| **Page Faults / I/O Write / I/O Read** | Page fault and I/O rates between fresh samples. |
 | **Node column** | Exactly which node your job landed on, so you can `ssh` or `srun --overlap` instantly |
 
 All of this from **two SLURM calls** (`squeue` + `sstat`), batched, with a local cache to avoid hammering the scheduler.
@@ -69,7 +69,7 @@ pipx upgrade slurm-job-detective
 ```bash
 sjdet                             # auto-detects $USER, shows all your jobs
 sjdet --user alice                # inspect another user's jobs
-sjdet --max-jobs 20               # show up to 20 jobs (default: 10)
+sjdet --max-jobs 20               # query sstat for up to 20 running jobs (default: 10)
 sjdet --interval 120              # minimum seconds between sstat polls (default: 60)
 sjdet --headroom 0.30             # memory suggestion headroom: ceil(MaxRSS × 1.30) (default: 20%)
 sjdet --force-update-nodes        # forces an update to the node info cache
@@ -98,12 +98,20 @@ Update-command strategy for `--update`:
 
 **Reading the GPU column:**
 - Green/yellow/red follow the same utilization brackets as CPU and RAM.
-- If GPU memory is unavailable, `sjdet` falls back to GPU utilization.
+- VRAM is summed over all allocated GPUs and compared with their combined capacity.
+- If the per-GPU VRAM size is unknown, `sjdet` falls back to the mean utilization per GPU.
 
-**Reading MaxPages / MaxDisk columns:**
-- These columns show rate changes between fresh `sstat` samples.
+**Reading the RAM column:**
+- The allocated RAM comes from the job's TRES allocation, so `--mem` and `--mem-per-cpu` both show the job total.
+- Peak RAM is the larger of SLURM's single-task peak (`MaxRSS`) and the current sum over all tasks, added up over running steps.
+
+**Reading the Page Faults / I/O columns:**
+- These columns show rates between fresh `sstat` samples, summed over all tasks.
 - `baseline` means this run established the first comparison point.
-- Re-run after the cache interval to see measured page and disk rates.
+- Re-run after the cache interval to see measured page fault and I/O rates.
+- I/O comes from SLURM's per-process `rchar`/`wchar` counters: every `read()`/`write()` counts, including page-cache hits, pipes and sockets, not only physical disk traffic.
+
+**Inspecting other users:** `sstat` only returns metrics for your own jobs unless you are a SLURM operator/admin, so `--user other` usually shows job states without usage metrics.
 
 **To jump to your job's node:**
 ```bash
@@ -117,8 +125,8 @@ srun --overlap --jobid=<JOBID> --pty nvidia-smi   # run nvidia-smi inside your a
 
 Each invocation makes exactly **two SLURM calls**:
 
-1. `squeue` — one call for all your jobs (state, node, GRES)
-2. `sstat` — one batched call for all running job IDs
+1. `squeue` — one call for all your jobs (state, node, allocated TRES such as memory and GPUs)
+2. `sstat` — one batched call for all running job IDs (`--allsteps --noconvert`)
 
 GPU hardware info (`scontrol show node`) is queried **once per node**, then cached locally forever — GPU models don't change between runs.
 
@@ -133,6 +141,12 @@ git clone https://github.com/e-candeloro/slurm_job_detective
 cd slurm_job_detective
 uv sync --dev        # creates .venv, installs deps + torch (for GPU load testing)
 uv run sjdet         # run without activating the venv
+```
+
+**Demo GIF** (regenerate after changing the table output; needs Node.js 22+ and FFmpeg):
+```bash
+uv run python scripts/build_demo_video.py   # mock output -> HyperFrames composition
+cd media/demo/hyperframes && npx hyperframes render --format gif --fps 15 -o ../sjdet_demo.gif
 ```
 
 **GPU load test** (to see real VRAM numbers in the table):
@@ -155,5 +169,6 @@ src/sjdet/
 └── cache.py    ← local JSON cache (throttles sstat + persists node info)
 scripts/
 ├── gpu_load_test.py  ← dev tool to burn VRAM and verify GPU column
-└── mock_cli.py ← dev tool to test the CLI without the access of a SLURM scheduler
+├── mock_cli.py ← dev tool to test the CLI without the access of a SLURM scheduler
+└── build_demo_video.py ← builds the README demo GIF composition from the mock output
 ```

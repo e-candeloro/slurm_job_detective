@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -11,35 +12,45 @@ def _cache_base() -> Path:
 
 
 CACHE_DIR = _cache_base() / "slurm_stats"
-CACHE_FILE = (
-    CACHE_DIR / f"live_cache_{os.environ.get('SLURM_STATS_USER', 'default')}.json"
-)
 
 
-def read_cache() -> dict:
+def cache_file(user: str) -> Path:
+    """Per-inspected-user cache file, so `--user` runs keep separate history."""
+    safe_user = re.sub(r"[^A-Za-z0-9_.-]", "_", user or "") or "default"
+    return CACHE_DIR / f"live_cache_{safe_user}.json"
+
+
+def read_cache(user: str) -> dict:
     try:
-        if CACHE_FILE.exists():
-            return json.loads(CACHE_FILE.read_text())
+        path = cache_file(user)
+        if path.exists():
+            data = json.loads(path.read_text())
+            return data if isinstance(data, dict) else {}
     except Exception:
         pass
     return {}
 
 
-def write_cache(d: dict) -> None:
+def write_cache(user: str, d: dict) -> None:
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(CACHE_DIR, 0o700)
         except Exception:
             pass
-        CACHE_FILE.write_text(json.dumps(d))
+        # Write then rename so concurrent runs never read a half-written file.
+        path = cache_file(user)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(d))
+        os.replace(tmp, path)
     except Exception:
         pass
 
 
-def clear_cache() -> None:
+def clear_cache(user: str) -> None:
     try:
-        if CACHE_FILE.exists():
-            CACHE_FILE.unlink()
+        path = cache_file(user)
+        if path.exists():
+            path.unlink()
     except Exception:
         pass

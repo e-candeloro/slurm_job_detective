@@ -5,7 +5,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.error
 import urllib.request
 from importlib import metadata
 from typing import Dict, List, Optional, Tuple
@@ -31,12 +30,9 @@ def _http_get_json(url: str, timeout: float = 4.0) -> Optional[object]:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
-    except (
-        urllib.error.HTTPError,
-        urllib.error.URLError,
-        TimeoutError,
-        json.JSONDecodeError,
-    ):
+    except (OSError, ValueError):
+        # OSError covers URLError/HTTPError, timeouts and connection resets
+        # while reading; ValueError covers bad JSON and bad encodings.
         return None
 
 

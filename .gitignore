@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# HyperFrames local history, check reports and snapshots (demo GIF project)
+media/demo/hyperframes/.hyperframes/
+media/demo/hyperframes/renders/

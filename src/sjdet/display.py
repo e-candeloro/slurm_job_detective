@@ -20,15 +20,10 @@ ROW_STYLES = ["none", "on grey11"]
 MIN_ROW_LINES = 2
 ROW_PADDING_TOP = 1
 ROW_PADDING_BOTTOM = 1
-EPSILON = 1e-9
 
 
 def state_cell(state: str) -> Text:
-    return (
-        Text("RUNNING", style="bold green")
-        if state == "RUNNING"
-        else Text("PENDING", style="bold yellow3")
-    )
+    return Text(state or "-", style="bold green" if state == "RUNNING" else "bold yellow3")
 
 
 def color_for_util(pct: float) -> str:
@@ -141,7 +136,6 @@ def format_disk_rate(rate_gb_per_sec: float) -> str:
 def cumulative_metric_group(
     rate_label: str,
     change_pct: Optional[float],
-    delta: float,
     reset: bool,
     has_history: bool,
 ) -> Group:
@@ -221,10 +215,12 @@ def gpu_group(
     gpu_util_pct: float,
     gpu_total_gb: float = 0.0,
     running: bool = False,
-    gpu_mem_trend: int = 0,
     gpu_change_pct: Optional[float] = None,
 ) -> Group:
-    """Render compact GPU summary with at most two lines."""
+    """Render compact GPU summary with at most two lines.
+
+    `gpu_mem_gb` and `gpu_total_gb` are totals across all allocated GPUs.
+    """
     if gpu_count == 0:
         return Group(Text("-", style="dim"))
 
@@ -281,9 +277,9 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
         t.add_column(
             "RAM Max Util %", justify="center", no_wrap=True, vertical="middle"
         )
-    t.add_column("MaxPages", justify="center", vertical="middle")
-    t.add_column("MaxDiskWr", justify="center", vertical="middle")
-    t.add_column("MaxDiskRead", justify="center", vertical="middle")
+    t.add_column("Page Faults", justify="center", vertical="middle")
+    t.add_column("I/O Write", justify="center", vertical="middle")
+    t.add_column("I/O Read", justify="center", vertical="middle")
 
     for r in sorted(
         rows,
@@ -293,19 +289,7 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
             x.jobid,
         ),
     ):
-        if r.state == "RUNNING":
-            has_history = (
-                r.cpu_eff_change_pct is not None
-                or r.maxrss_change_pct is not None
-                or r.gpu_vram_change_pct is not None
-                or abs(r.maxpages_delta) > EPSILON
-                or abs(r.maxdisk_delta_gb) > EPSILON
-                or abs(r.maxdiskread_delta_gb) > EPSILON
-                or r.maxpages_reset
-                or r.maxdisk_reset
-                or r.maxdiskread_reset
-            )
-
+        if r.state == "RUNNING" and r.sampled:
             cpu_combined = cpu_combined_group(
                 r.cpu_eff_pct,
                 r.cpus,
@@ -327,39 +311,31 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
                 else Text("-")
             )
 
-            pages_pct = r.maxpages_rate_change_pct
-            disk_pct = r.maxdisk_rate_change_pct
-            disk_read_pct = r.maxdiskread_rate_change_pct
-
             pages = cumulative_metric_group(
-                format_pages_rate(r.maxpages_rate_per_sec),
-                pages_pct,
-                r.maxpages_delta,
-                r.maxpages_reset,
-                has_history,
+                format_pages_rate(r.pages.rate_per_sec),
+                r.pages.rate_change_pct,
+                r.pages.reset,
+                r.has_history,
             )
             disk = cumulative_metric_group(
-                format_disk_rate(r.maxdisk_rate_gb_per_sec),
-                disk_pct,
-                r.maxdisk_delta_gb,
-                r.maxdisk_reset,
-                has_history,
+                format_disk_rate(r.io_write.rate_per_sec),
+                r.io_write.rate_change_pct,
+                r.io_write.reset,
+                r.has_history,
             )
             disk_read = cumulative_metric_group(
-                format_disk_rate(r.maxdiskread_rate_gb_per_sec),
-                disk_read_pct,
-                r.maxdiskread_delta_gb,
-                r.maxdiskread_reset,
-                has_history,
+                format_disk_rate(r.io_read.rate_per_sec),
+                r.io_read.rate_change_pct,
+                r.io_read.reset,
+                r.has_history,
             )
             gpu = gpu_group(
                 r.gpu_count,
                 r.gpu_type,
                 r.gpu_mem_gb,
                 r.gpu_util_pct,
-                r.gpu_total_gb,
+                r.gpu_capacity_gb,
                 running=True,
-                gpu_mem_trend=r.gpu_mem_trend,
                 gpu_change_pct=r.gpu_vram_change_pct,
             )
         else:
@@ -370,7 +346,7 @@ def build_table(rows: List[LiveRow], headroom: float) -> Table:
             disk = Text("-", style="dim")
             disk_read = Text("-", style="dim")
             gpu = gpu_group(
-                r.gpu_count, r.gpu_type, 0.0, 0.0, r.gpu_total_gb, running=False
+                r.gpu_count, r.gpu_type, 0.0, 0.0, r.gpu_capacity_gb, running=False
             )
 
         _ = sugg

@@ -34,6 +34,7 @@ This file gives coding agents the minimum repository-specific context needed to 
 - `src/sjdet/__main__.py`: module entry point.
 - `scripts/mock_cli.py`: local mocked CLI runner without a real SLURM scheduler.
 - `scripts/gpu_load_test.py`: GPU stress helper for manual verification on a real cluster.
+- `scripts/build_demo_video.py`: writes the HyperFrames composition in `media/demo/hyperframes/` from the mock output; render it to `media/demo/sjdet_demo.gif` (see `README.md`).
 
 ## Setup Commands
 
